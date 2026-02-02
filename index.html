@@ -50,7 +50,7 @@
       }
 
       // ---------------------------
-      // Device spec / DPR selection (POINT 2 ADDED)
+      // Device spec / DPR selection
       // ---------------------------
 
       function isMobileUA() {
@@ -89,37 +89,12 @@
         }
       }
 
-      // Optional on-screen debug: ?perfdebug=1
-      function perfDebugEnabled() {
-        try {
-          var p = new URLSearchParams(window.location.search);
-          return p.get("perfdebug") === "1";
-        } catch (e) {
-          return false;
-        }
-      }
-
-      function showPerfOverlay(text) {
-        if (!perfDebugEnabled()) return;
-        var el = document.getElementById("perf-overlay");
-        if (!el) {
-          el = document.createElement("div");
-          el.id = "perf-overlay";
-          el.style.cssText =
-            "position:fixed;left:8px;top:8px;z-index:9999;" +
-            "background:rgba(0,0,0,0.75);color:#fff;padding:8px 10px;" +
-            "font:12px/1.3 monospace;border-radius:6px;max-width:92vw;white-space:pre-wrap;";
-          document.body.appendChild(el);
-        }
-        el.textContent = text;
-      }
-
       function pickDevicePixelRatio() {
         // 1) URL override wins
         var forced = getForcedDprFromUrl();
         if (forced !== null) return clamp(forced, 0.5, 3);
 
-        // 2) Cache (new key so you don't get stuck on v1=1)
+        // 2) Cache (new key so you don't get stuck on old values)
         var cacheKey = "screenx_dpr_v2";
         try {
           var cached = parseFloat(localStorage.getItem(cacheKey));
@@ -130,33 +105,23 @@
         var mem = s.deviceMemoryGB;          // 0 if unsupported (iOS Safari often)
         var cores = s.hardwareConcurrency;   // 0 if unsupported
 
-        // ✅ Better default: assume 2 on mobile unless we see low-end signs
+        // ✅ Default to 2 on mobile unless we see low-end signs
         var chosen = 2.0;
 
-        // If we have memory info, use it
         if (mem > 0) {
           if (mem <= 2) chosen = 1.0;
           else if (mem <= 4) chosen = 1.5;
           else chosen = 2.0;
-        }
-        // Otherwise use cores as a fallback (less reliable)
-        else if (cores > 0) {
+        } else if (cores > 0) {
           if (cores <= 2) chosen = 1.0;
-          else if (cores <= 4) chosen = 1.5;   // 4 cores => 1.5 (not 1)
+          else if (cores <= 4) chosen = 1.5; // important: 4 cores => 1.5
           else chosen = 2.0;
         }
 
         chosen = clamp(chosen, 1.0, 2.0);
 
         try { localStorage.setItem(cacheKey, String(chosen)); } catch (e) {}
-
         console.log("[ScreenX] DPR chosen:", chosen, "spec:", s);
-        showPerfOverlay(
-          "Chosen DPR (config.devicePixelRatio): " + chosen + "\n" +
-          "navigator.deviceMemory: " + mem + "\n" +
-          "hardwareConcurrency: " + cores + "\n" +
-          "window.devicePixelRatio: " + s.windowDpr
-        );
 
         return chosen;
       }
@@ -188,11 +153,10 @@
         document.querySelector("#unity-container").className = "unity-mobile";
         canvas.className = "unity-mobile";
 
-        // ✅ Auto-pick DPR BEFORE Unity starts
+        // ✅ Set DPR BEFORE Unity starts (startup-only setting)
         config.devicePixelRatio = pickDevicePixelRatio();
 
       } else {
-        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
         canvas.style.width = "960px";
         canvas.style.height = "600px";
       }
@@ -209,6 +173,25 @@
           document.querySelector("#unity-fullscreen-button").onclick = () => {
             unityInstance.SetFullscreen(1);
           };
+
+          // -------------------------------------------------------
+          // Send boot info into Unity (PerfOverlay.SetBootInfo(json))
+          // -------------------------------------------------------
+          try {
+            var bootInfo = {
+              chosenDpr: config.devicePixelRatio || 0,
+              windowDpr: window.devicePixelRatio || 2,
+              deviceMemoryGB: navigator.deviceMemory || 0,
+              hardwareConcurrency: navigator.hardwareConcurrency || 0,
+              screenW: (screen && screen.width) ? screen.width : 0,
+              screenH: (screen && screen.height) ? screen.height : 0,
+              ua: navigator.userAgent || ""
+            };
+            unityInstance.SendMessage("PerfOverlay", "SetBootInfo", JSON.stringify(bootInfo));
+          } catch (e) {
+            console.warn("Boot info SendMessage failed:", e);
+          }
+
         }).catch((message) => {
           alert(message);
         });
