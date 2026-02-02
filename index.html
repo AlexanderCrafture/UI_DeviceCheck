@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Unity Web Player | ScreenX</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
+  </head>
+  <body>
+    <div id="unity-container" class="unity-desktop">
+      <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+      <div id="unity-loading-bar">
+        <div id="unity-logo"></div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning"> </div>
+      <div id="unity-footer">
+        <div id="unity-logo-title-footer"></div>
+        <div id="unity-fullscreen-button"></div>
+        <div id="unity-build-title">ScreenX</div>
+      </div>
+    </div>
+
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+
+      // ---------------------------
+      // Device spec / DPR selection
+      // ---------------------------
+
+      function isMobileUA() {
+        return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      }
+
+      function safeGetNumber(v, fallback) {
+        return (typeof v === "number" && isFinite(v)) ? v : fallback;
+      }
+
+      function getSpecSnapshot() {
+        return {
+          ua: navigator.userAgent || "",
+          deviceMemoryGB: safeGetNumber(navigator.deviceMemory, 0),          // Chrome/Edge mostly
+          hardwareConcurrency: safeGetNumber(navigator.hardwareConcurrency, 0),
+          devicePixelRatio: safeGetNumber(window.devicePixelRatio, 1),
+          screenW: (screen && screen.width) ? screen.width : 0,
+          screenH: (screen && screen.height) ? screen.height : 0
+        };
+      }
+
+      // Allow forcing DPR via URL for testing: ?dpr=1  (or 1.5 / 2)
+      function getForcedDprFromUrl() {
+        try {
+          var p = new URLSearchParams(window.location.search);
+          if (!p.has("dpr")) return null;
+          var v = parseFloat(p.get("dpr"));
+          if (!isFinite(v) || v <= 0) return null;
+          return v;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
+
+      function pickDevicePixelRatio() {
+        // If user forces DPR, respect it.
+        var forced = getForcedDprFromUrl();
+        if (forced !== null) return clamp(forced, 0.5, 3);
+
+        // Cache to keep consistent between reloads (optional).
+        // Bump the version if you change heuristics.
+        var cacheKey = "screenx_dpr_v1";
+        try {
+          var cached = parseFloat(localStorage.getItem(cacheKey));
+          if (isFinite(cached) && cached > 0) return clamp(cached, 0.5, 3);
+        } catch (e) { /* ignore */ }
+
+        var s = getSpecSnapshot();
+        var mem = s.deviceMemoryGB;          // 0 if unsupported (iOS Safari often)
+        var cores = s.hardwareConcurrency;   // 0 if unsupported
+        var nativeDpr = s.devicePixelRatio;
+
+        // Default targets for mobile
+        var chosen;
+
+        // Heuristic 1: memory (best signal when available)
+        if (mem > 0) {
+          if (mem <= 2) chosen = 1.0;        // low end
+          else if (mem <= 4) chosen = 1.5;   // mid
+          else chosen = 2.0;                 // high
+        }
+        // Heuristic 2: cores (fallback)
+        else if (cores > 0) {
+          if (cores <= 4) chosen = 1.0;
+          else if (cores <= 6) chosen = 1.5;
+          else chosen = 2.0;
+        }
+        // Heuristic 3: unknown device (privacy-limited browsers)
+        else {
+          // Be conservative on mobile: don’t default to full native DPR.
+          chosen = 1.5;
+        }
+
+        // Don’t exceed 2 on mobile unless you really want supersampling.
+        // Also don’t exceed native DPR (no reason to render more than screen).
+        chosen = Math.min(chosen, nativeDpr, 2.0);
+        chosen = clamp(chosen, 1.0, 2.0);
+
+        try { localStorage.setItem(cacheKey, String(chosen)); } catch (e) { /* ignore */ }
+        console.log("[ScreenX] Mobile DPR chosen:", chosen, "spec:", s);
+
+        return chosen;
+      }
+
+      // -----------------------------------------
+      // Unity banner (unchanged)
+      // -----------------------------------------
+      function unityShowBanner(msg, type) {
+        var warningBanner = document.querySelector("#unity-warning");
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        if (type == 'error') div.style = 'background: red; padding: 10px;';
+        else {
+          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
+          setTimeout(function() {
+            warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/ScreenX_NewUI_V1.37.loader.js";
+      var config = {
+        arguments: [],
+        dataUrl: buildUrl + "/ScreenX_NewUI_V1.37.data.unityweb",
+        frameworkUrl: buildUrl + "/ScreenX_NewUI_V1.37.framework.js.unityweb",
+        codeUrl: buildUrl + "/ScreenX_NewUI_V1.37.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "Crafture",
+        productName: "ScreenX",
+        productVersion: "V1.00",
+        showBanner: unityShowBanner,
+      };
+
+      if (isMobileUA()) {
+        // Mobile device style: fill the whole browser client area with the game canvas:
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+        document.querySelector("#unity-container").className = "unity-mobile";
+        canvas.className = "unity-mobile";
+
+        // ✅ Auto-pick DPR BEFORE Unity starts (biggest easy win on low-end)
+        config.devicePixelRatio = pickDevicePixelRatio();
+
+      } else {
+        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
+        canvas.style.width = "960px";
+        canvas.style.height = "600px";
+      }
+
+      document.querySelector("#unity-loading-bar").style.display = "block";
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
+        }).then((unityInstance) => {
+          document.querySelector("#unity-loading-bar").style.display = "none";
+          document.querySelector("#unity-fullscreen-button").onclick = () => {
+            unityInstance.SetFullscreen(1);
+          };
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
